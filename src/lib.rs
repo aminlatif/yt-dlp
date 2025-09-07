@@ -742,6 +742,7 @@ impl Youtube {
     /// # Errors
     ///
     /// This function will return an error if the video information could not be retrieved.
+    ///
     pub async fn download_video_with_progress<F>(
         &self,
         video: &model::Video,
@@ -783,6 +784,107 @@ impl Youtube {
             .await;
 
         Ok(download_id)
+    }
+
+    pub async fn download_video_with_progress_format<F, T>(
+        &self,
+        video: &model::Video,
+        output: impl AsRef<str> + std::fmt::Debug,
+        video_format_id: Option<String>,
+        audio_format_id: Option<String>,
+        video_progress_callback: F,
+        audio_progress_callback: T,
+    ) -> Result<(u64, u64, String, String)>
+    where
+        F: Fn(u64, u64) + Send + Sync + 'static,
+        T: Fn(u64, u64) + Send + Sync + 'static,
+    {
+        #[cfg(feature = "tracing")]
+        tracing::debug!("Downloading video with progress tracking: {}", video.id);
+
+        let mut video_format: Option<&model::format::Format> = None;
+        let mut audio_format: Option<&model::format::Format> = None;
+
+        if video_format_id.is_some() {
+            video_format = Some(
+                video
+                    .formats
+                    .iter()
+                    .find(|f| f.format_id == video_format_id.clone().unwrap())
+                    .ok_or_else(|| Error::MissingFormat(video_format_id.unwrap()))?,
+            );
+        } else {
+            video_format = video.best_video_format();
+        }
+
+        if audio_format_id.is_some() {
+            audio_format = Some(
+                video
+                    .formats
+                    .iter()
+                    .find(|f| f.format_id == audio_format_id.clone().unwrap())
+                    .ok_or_else(|| Error::MissingFormat(audio_format_id.unwrap()))?,
+            );
+        } else {
+            audio_format = video.best_audio_format();
+        }
+
+        let video_format = video_format.unwrap();
+        let audio_format = audio_format.unwrap();
+
+        // Get the URL
+        let video_url = video_format
+            .download_info
+            .url
+            .as_ref()
+            .ok_or_else(|| Error::MissingUrl(video_format.format_id.clone()))?;
+
+        let audio_url = audio_format
+            .download_info
+            .url
+            .as_ref()
+            .ok_or_else(|| Error::MissingUrl(audio_format.format_id.clone()))?;
+
+        let temp_file_name = format!(
+            "{}_{}_{}",
+            video.id, video_format.format_id, audio_format.format_id
+        );
+        let video_temp_file_name = format!(
+            "temp_video_{}.{}",
+            temp_file_name,
+            video_format.codec_info.video_ext.to_string().replace("Extension(", "").replace(")", "")
+        );
+        let audio_temp_file_name = format!(
+            "temp_audio_{}.{}",
+            temp_file_name,
+            audio_format.codec_info.audio_ext.to_string().replace("Extension(", "").replace(")", "")
+        );
+        let video_temp_file_path = self.output_dir.join(video_temp_file_name.clone());
+        let audio_temp_file_path = self.output_dir.join(audio_temp_file_name.clone());
+
+        // Create the output path
+        // let output_path = self.output_dir.join(temp_file_path.as_ref());
+        // Add to download queue with progress callback
+        let video_download_id = self
+            .download_manager
+            .enqueue_with_progress(
+                video_url,
+                video_temp_file_path,
+                Some(fetcher::download_manager::DownloadPriority::Normal),
+                video_progress_callback,
+            )
+            .await;
+        let audio_download_id = self
+            .download_manager
+            .enqueue_with_progress(
+                audio_url,
+                audio_temp_file_path,
+                Some(fetcher::download_manager::DownloadPriority::Normal),
+                audio_progress_callback,
+            )
+            .await;
+
+        Ok((video_download_id, audio_download_id, video_temp_file_name, audio_temp_file_name))
     }
 
     /// Get the status of a download.
