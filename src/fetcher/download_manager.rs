@@ -460,15 +460,18 @@ impl DownloadManager {
 
                 if let Some(callback) = task.progress_callback {
                     fetcher = fetcher.with_progress_callback(move |downloaded, total| {
-                        // Update status with progress
-                        let mut statuses = statuses_for_callback.blocking_lock();
-                        statuses.insert(
-                            task_id,
-                            DownloadStatus::Downloading {
-                                downloaded_bytes: downloaded,
-                                total_bytes: total,
-                            },
-                        );
+                        let statuses_for_callback = statuses_for_callback.clone();
+                        tokio::task::spawn_blocking(move || {
+                            // Update status with progress
+                            let mut statuses = statuses_for_callback.blocking_lock();
+                            statuses.insert(
+                                task_id,
+                                DownloadStatus::Downloading {
+                                    downloaded_bytes: downloaded,
+                                    total_bytes: total,
+                                },
+                            );
+                        });
 
                         // Call the original callback
                         callback(downloaded, total);
@@ -477,14 +480,17 @@ impl DownloadManager {
                     // Default callback that just updates the status
                     let statuses_for_callback = statuses_clone.clone();
                     fetcher = fetcher.with_progress_callback(move |downloaded, total| {
-                        let mut statuses = statuses_for_callback.blocking_lock();
-                        statuses.insert(
-                            task_id,
-                            DownloadStatus::Downloading {
-                                downloaded_bytes: downloaded,
-                                total_bytes: total,
-                            },
-                        );
+                        let statuses_for_callback = statuses_for_callback.clone();
+                        tokio::task::spawn_blocking(move || {
+                            let mut statuses = statuses_for_callback.blocking_lock();
+                            statuses.insert(
+                                task_id,
+                                DownloadStatus::Downloading {
+                                    downloaded_bytes: downloaded,
+                                    total_bytes: total,
+                                },
+                            );
+                        });
                     });
                 }
 
